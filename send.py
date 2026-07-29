@@ -359,19 +359,23 @@ def _embed_images(
     return str(soup), embedded, skipped
 
 
-_COVER_W, _COVER_H = 1600, 2560
+_COVER_W, _COVER_H = 1600, 2133  # 3:4 aspect ratio, matches Kindle Oasis 10th gen
 _COVER_FONT = "/System/Library/Fonts/Helvetica.ttc"
 
 
 def _render_cover(heading: str, subheading: str) -> bytes:
-    img = PilImage.new("RGB", (_COVER_W, _COVER_H), color=(0, 0, 0))
+    img = PilImage.new("RGB", (_COVER_W, _COVER_H), color=(18, 18, 18))
     draw = ImageDraw.Draw(img)
-    h_font = ImageFont.truetype(_COVER_FONT, 140)
-    s_font = ImageFont.truetype(_COVER_FONT, 90)
-    hw = draw.textlength(heading, font=h_font)
-    sw = draw.textlength(subheading, font=s_font)
-    draw.text(((_COVER_W - hw) / 2, _COVER_H * 0.38), heading, fill="white", font=h_font)
-    draw.text(((_COVER_W - sw) / 2, _COVER_H * 0.50), subheading, fill="white", font=s_font)
+    h_font = ImageFont.truetype(_COVER_FONT, 220)
+    s_font = ImageFont.truetype(_COVER_FONT, 100)
+    hb = draw.textbbox((0, 0), heading, font=h_font)
+    sb = draw.textbbox((0, 0), subheading, font=s_font)
+    h_h = hb[3] - hb[1]
+    s_h = sb[3] - sb[1]
+    block_h = h_h + 44 + s_h
+    block_top = _COVER_H // 2 - block_h // 2
+    draw.text(((_COVER_W - (hb[2] - hb[0])) // 2 - hb[0], block_top - hb[1]), heading, fill=(255, 255, 255), font=h_font)
+    draw.text(((_COVER_W - (sb[2] - sb[0])) // 2 - sb[0], block_top + h_h + 44 - sb[1]), subheading, fill=(180, 180, 180), font=s_font)
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=90)
     return buf.getvalue()
@@ -383,7 +387,7 @@ def build_epub(title: str, articles: list[Article]) -> bytes:
     book.set_title(title)
     book.set_language("en")
     book.add_author("Instapaper")
-    book.set_cover("cover.jpg", _render_cover("Instapaper Digest", title))
+    book.set_cover("cover.jpg", _render_cover("Instapaper", title))
 
     css = """\
 .article-title {
