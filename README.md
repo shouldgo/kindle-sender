@@ -43,8 +43,8 @@ Add `MAIL_FROM` to Amazon's approved senders list at amazon.com/myk → Preferen
 ## Usage
 
 ```bash
-python3 send.py            # prompts for article count, sends
-python3 send.py --count 5  # skip prompt
+python3 send.py                          # prompts: count (default 10), then latest/oldest (default oldest)
+python3 send.py --count 5 --order latest # skip prompts
 python3 send.py --dry-run  # build EPUB locally, don't send
 ```
 
