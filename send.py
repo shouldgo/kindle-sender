@@ -165,7 +165,8 @@ class InstapaperClient:
             return resp
         return resp  # second 401 falls through to caller
 
-    def list_unread(self, limit: int = 10) -> list[dict]:
+    def list_unread(self, limit: int = 500) -> list[dict]:
+        # 500 is the API maximum; there is no count or sort endpoint.
         resp = self._request("bookmarks/list", {"limit": limit, "folder_id": "unread"})
         resp.raise_for_status()
         return [x for x in resp.json() if x.get("type") == "bookmark"]
@@ -488,7 +489,11 @@ tell application "Mail"
     send msg
 end tell
 """
-    result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+    # Absolute path + close_fds=False makes subprocess use posix_spawn instead of fork.
+    # After requests/Network.framework threads have run, fork() segfaults in the child on macOS 27.
+    result = subprocess.run(["/usr/bin/osascript", "-e", script], capture_output=True, text=True, close_fds=False)
+    if result.returncode < 0:
+        raise RuntimeError(f"osascript killed by signal {-result.returncode}")
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip())
 
@@ -497,18 +502,31 @@ end tell
 # Interactive count prompt
 # ---------------------------------------------------------------------------
 
-def prompt_article_count(default: int) -> int:
+def prompt_article_count(default: int, max_n: int, total_label: str) -> int:
     while True:
-        raw = input(f"How many articles? [{default}]: ").strip()
+        raw = input(f"You have {total_label} unread. How many articles? [{default}]: ").strip()
         if not raw:
             return default
         try:
             n = int(raw)
-            if 1 <= n <= 500:
+            if 1 <= n <= max_n:
                 return n
-            print("Enter a number between 1 and 500.")
+            print(f"Enter a number between 1 and {max_n}.")
         except ValueError:
             print("Please enter a valid number.")
+
+
+def prompt_order(default: str = "oldest") -> str:
+    hint = "[o]/l" if default == "oldest" else "o/[l]"
+    while True:
+        raw = input(f"Latest or oldest? {hint}: ").strip().lower()
+        if not raw:
+            return default
+        if raw in ("o", "oldest"):
+            return "oldest"
+        if raw in ("l", "latest"):
+            return "latest"
+        print("Enter 'o' (oldest) or 'l' (latest).")
 
 
 # ---------------------------------------------------------------------------
@@ -519,23 +537,33 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Send Instapaper articles to Kindle.")
     parser.add_argument("--dry-run", action="store_true", help="Build EPUB but do not send email.")
     parser.add_argument("--count", type=int, default=None, help="Number of articles (skips prompt).")
+    parser.add_argument("--order", choices=["latest", "oldest"], default=None, help="Which end of the unread list (skips prompt).")
     args = parser.parse_args()
+    if args.count is not None and args.count < 1:
+        parser.error("--count must be at least 1")
 
     cfg = load_config()
+    client = InstapaperClient(cfg)
+
+    unread = client.list_unread()
+    if not unread:
+        print("No unread articles.")
+        return 0
+    total = len(unread)
+    total_label = f"{total}+" if total >= 500 else str(total)
 
     if args.count is not None:
         count = args.count
+        if count > total:
+            print(f"Only {total_label} unread — sending {total}.")
+            count = total
     else:
-        count = prompt_article_count(cfg.articles_per_send)
+        count = prompt_article_count(min(cfg.articles_per_send, total), total, total_label)
 
-    client = InstapaperClient(cfg)
+    order = args.order or prompt_order()
 
-    print(f"Fetching {count} unread bookmarks…")
-    bookmarks = client.list_unread(limit=count)
-
-    if not bookmarks:
-        print("No unread articles.")
-        return 0
+    unread.sort(key=lambda b: int(b.get("time", 0)), reverse=(order == "latest"))
+    bookmarks = unread[:count]
 
     print(f"{len(bookmarks)} article(s) to fetch.")
     articles: list[Article] = []
