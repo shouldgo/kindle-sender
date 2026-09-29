@@ -7,7 +7,7 @@ Replicates Instapaper's paywalled "Send to Kindle" feature. Fetches saved unread
 1. Authenticates with Instapaper API v2 using a personal access token
 2. Fetches unread bookmarks and their parsed HTML via Instapaper's API
 3. Downloads and embeds all images into the EPUB
-4. Builds a single EPUB digest and emails it to the Kindle via Mail.app
+4. Builds a single EPUB digest (each chapter headed by title and an author · domain · N min read line) and emails it to the Kindle via Mail.app
 
 After reading on Kindle, archive articles manually in Instapaper.
 
