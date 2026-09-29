@@ -7,7 +7,6 @@ import argparse
 import dataclasses
 import hashlib
 import html
-import json
 import mimetypes
 import os
 import secrets
@@ -26,22 +25,18 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from ebooklib import epub
 from PIL import Image as PilImage, ImageDraw, ImageFont
-from requests_oauthlib import OAuth1Session
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
-TOKEN_PATH = Path(".instapaper_token")
-INSTAPAPER_BASE = "https://www.instapaper.com/api/1"
+INSTAPAPER_BASE = "https://www.instapaper.com/api/2"
+LIST_PAGE_SIZE = 500  # API maximum per page
 
 
 @dataclasses.dataclass
 class Config:
-    consumer_key: str
-    consumer_secret: str
-    username: str
-    password: str
+    token: str
     kindle_email: str
     articles_per_send: int
     mail_from: str
@@ -67,46 +62,17 @@ def _parse_int_env(key: str, default: int) -> int:
 
 def load_config() -> Config:
     load_dotenv()
-    required = [
-        "INSTAPAPER_CONSUMER_KEY",
-        "INSTAPAPER_CONSUMER_SECRET",
-        "INSTAPAPER_USERNAME",
-        "INSTAPAPER_PASSWORD",
-        "KINDLE_EMAIL",
-    ]
+    required = ["INSTAPAPER_TOKEN", "KINDLE_EMAIL"]
     missing = [k for k in required if not os.environ.get(k)]
     if missing:
         print(f"Missing required .env keys: {', '.join(missing)}")
         raise SystemExit(2)
     return Config(
-        consumer_key=os.environ["INSTAPAPER_CONSUMER_KEY"],
-        consumer_secret=os.environ["INSTAPAPER_CONSUMER_SECRET"],
-        username=os.environ["INSTAPAPER_USERNAME"],
-        password=os.environ["INSTAPAPER_PASSWORD"],
+        token=os.environ["INSTAPAPER_TOKEN"],
         kindle_email=os.environ["KINDLE_EMAIL"],
         articles_per_send=_parse_int_env("ARTICLES_PER_SEND", 10),
         mail_from=os.environ.get("MAIL_FROM", ""),
     )
-
-
-# ---------------------------------------------------------------------------
-# State helpers
-# ---------------------------------------------------------------------------
-
-def load_token() -> tuple[str, str] | None:
-    if not TOKEN_PATH.exists():
-        return None
-    try:
-        data = json.loads(TOKEN_PATH.read_text())
-        return data["oauth_token"], data["oauth_token_secret"]
-    except Exception:
-        return None
-
-
-def save_token(token: str, secret: str) -> None:
-    tmp = TOKEN_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"oauth_token": token, "oauth_token_secret": secret}))
-    os.replace(tmp, TOKEN_PATH)
 
 
 # ---------------------------------------------------------------------------
@@ -115,67 +81,33 @@ def save_token(token: str, secret: str) -> None:
 
 class InstapaperClient:
     def __init__(self, cfg: Config) -> None:
-        self._cfg = cfg
-        self._token: tuple[str, str] | None = load_token()
+        self._http = requests.Session()
+        self._http.headers["Authorization"] = f"Bearer {cfg.token}"
 
-    def _xauth(self) -> tuple[str, str]:
-        session = OAuth1Session(
-            client_key=self._cfg.consumer_key,
-            client_secret=self._cfg.consumer_secret,
-        )
-        resp = session.post(
-            f"{INSTAPAPER_BASE}/oauth/access_token",
-            data={
-                "x_auth_username": self._cfg.username,
-                "x_auth_password": self._cfg.password,
-                "x_auth_mode": "client_auth",
-            },
-            timeout=30,
-        )
+    def _get(self, path: str, params: dict | None = None) -> requests.Response:
+        resp = self._http.get(f"{INSTAPAPER_BASE}/{path}", params=params, timeout=30)
         if resp.status_code == 401:
-            print("Instapaper auth failed — check username/password and consumer key/secret.")
+            print("Instapaper token invalid — regenerate it at instapaper.com/developers/applications.")
             raise SystemExit(1)
-        resp.raise_for_status()
-        parsed = urllib.parse.parse_qs(resp.text)
-        token = parsed["oauth_token"][0]
-        secret = parsed["oauth_token_secret"][0]
-        save_token(token, secret)
-        print("Authenticated with Instapaper, token cached.")
-        return token, secret
+        return resp
 
-    def _session(self) -> OAuth1Session:
-        if self._token is None:
-            self._token = self._xauth()
-        token, secret = self._token
-        return OAuth1Session(
-            client_key=self._cfg.consumer_key,
-            client_secret=self._cfg.consumer_secret,
-            resource_owner_key=token,
-            resource_owner_secret=secret,
-        )
-
-    def _request(self, endpoint: str, data: dict) -> object:
-        # Makes a signed POST, retries once after re-authing on 401.
-        for attempt in range(2):
-            resp = self._session().post(f"{INSTAPAPER_BASE}/{endpoint}", data=data, timeout=30)
-            if resp.status_code == 401 and attempt == 0:
-                TOKEN_PATH.unlink(missing_ok=True)
-                self._token = None
-                continue
-            return resp
-        return resp  # second 401 falls through to caller
-
-    def list_unread(self, limit: int = 500) -> list[dict]:
-        # 500 is the API maximum; there is no count or sort endpoint.
-        resp = self._request("bookmarks/list", {"limit": limit, "folder_id": "unread"})
-        resp.raise_for_status()
-        return [x for x in resp.json() if x.get("type") == "bookmark"]
+    def list_unread(self) -> list[dict]:
+        # "home" is the unread list; page until we've seen `total` bookmarks.
+        bookmarks: list[dict] = []
+        while True:
+            resp = self._get("bookmarks", {"section": "home", "limit": LIST_PAGE_SIZE, "offset": len(bookmarks)})
+            resp.raise_for_status()
+            data = resp.json()
+            page = data["bookmarks"]
+            bookmarks.extend(page)
+            if not page or len(bookmarks) >= data["total"]:
+                return bookmarks
 
     def get_text(self, bookmark_id: int) -> str:
-        resp = self._request("bookmarks/get_text", {"bookmark_id": bookmark_id})
+        resp = self._get(f"bookmarks/{bookmark_id}/parse")
         if not resp.ok:
             raise RuntimeError(f"HTTP {resp.status_code}")
-        return resp.text
+        return resp.json()["content"]["body"] or ""
 
 
 # ---------------------------------------------------------------------------
@@ -502,9 +434,9 @@ end tell
 # Interactive count prompt
 # ---------------------------------------------------------------------------
 
-def prompt_article_count(default: int, max_n: int, total_label: str) -> int:
+def prompt_article_count(default: int, max_n: int) -> int:
     while True:
-        raw = input(f"You have {total_label} unread. How many articles? [{default}]: ").strip()
+        raw = input(f"You have {max_n} unread. How many articles? [{default}]: ").strip()
         if not raw:
             return default
         try:
@@ -550,15 +482,14 @@ def main() -> int:
         print("No unread articles.")
         return 0
     total = len(unread)
-    total_label = f"{total}+" if total >= 500 else str(total)
 
     if args.count is not None:
         count = args.count
         if count > total:
-            print(f"Only {total_label} unread — sending {total}.")
+            print(f"Only {total} unread — sending {total}.")
             count = total
     else:
-        count = prompt_article_count(min(cfg.articles_per_send, total), total, total_label)
+        count = prompt_article_count(min(cfg.articles_per_send, total), total)
 
     order = args.order or prompt_order()
 
@@ -568,7 +499,7 @@ def main() -> int:
     print(f"{len(bookmarks)} article(s) to fetch.")
     articles: list[Article] = []
     for b in bookmarks:
-        bid = b["bookmark_id"]
+        bid = b["id"]
         btitle = b.get("title") or f"Article {bid}"
         print(f"  Fetching: {btitle}")
         try:
