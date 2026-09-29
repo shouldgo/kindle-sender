@@ -49,6 +49,8 @@ class Article:
     url: str
     time: int
     html_content: str
+    author: str
+    words: int | None
 
 
 def _parse_int_env(key: str, default: int) -> int:
@@ -103,11 +105,13 @@ class InstapaperClient:
             if not page or len(bookmarks) >= data["total"]:
                 return bookmarks
 
-    def get_text(self, bookmark_id: int) -> str:
+    def get_text(self, bookmark_id: int) -> tuple[str, int | None]:
         resp = self._get(f"bookmarks/{bookmark_id}/parse")
         if not resp.ok:
             raise RuntimeError(f"HTTP {resp.status_code}")
-        return resp.json()["content"]["body"] or ""
+        content = resp.json()["content"]
+        words = content.get("words")
+        return content["body"] or "", words if isinstance(words, int) else None
 
 
 # ---------------------------------------------------------------------------
@@ -360,9 +364,14 @@ h1, h2, h3, h4, h5, h6 {
         total_embedded += n_emb
         total_skipped += n_skip
 
+        meta = [
+            html.escape(art.author),
+            f"<a href='{html.escape(art.url)}'>{html.escape(domain_of(art.url))}</a>",
+            f"{max(1, round(art.words / 230))} min read" if art.words else "",
+        ]
         body = (
             f"<p class='article-title'><strong>{html.escape(art.title)}</strong></p>"
-            f"<p><a href='{html.escape(art.url)}'>{html.escape(domain_of(art.url))}</a></p>"
+            f"<p>{' · '.join(p for p in meta if p)}</p>"
             f"<hr/>{rewritten_html or '<p>(no content)</p>'}"
         )
         ch.add_link(href="../style/main.css", rel="stylesheet", type="text/css")
@@ -503,13 +512,15 @@ def main() -> int:
         btitle = b.get("title") or f"Article {bid}"
         print(f"  Fetching: {btitle}")
         try:
-            raw_html = client.get_text(bid)
+            raw_html, words = client.get_text(bid)
             articles.append(Article(
                 id=bid,
                 title=btitle,
                 url=b.get("url", ""),
                 time=int(b.get("time", 0)),
                 html_content=raw_html,
+                author=b.get("author") or "",
+                words=words,
             ))
         except Exception as e:
             print(f"  [skip] {bid} {btitle!r}: {e}")
