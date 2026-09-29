@@ -4,7 +4,7 @@ Replicates Instapaper's paywalled "Send to Kindle" feature. Fetches saved unread
 
 ## What it does
 
-1. Authenticates with Instapaper via xAuth (OAuth 1.0a)
+1. Authenticates with Instapaper API v2 using a personal access token
 2. Fetches unread bookmarks and their parsed HTML via Instapaper's API
 3. Downloads and embeds all images into the EPUB
 4. Builds a single EPUB digest and emails it to the Kindle via Mail.app
@@ -33,8 +33,7 @@ pip install -r requirements.txt
 
 Copy `.env.example` to `.env` and fill in:
 
-- `INSTAPAPER_CONSUMER_KEY` / `INSTAPAPER_CONSUMER_SECRET` — register an "Owner Only" app at [instapaper.com/main/request_oauth_consumer_token](https://www.instapaper.com/main/request_oauth_consumer_token)
-- `INSTAPAPER_USERNAME` / `INSTAPAPER_PASSWORD` — your Instapaper login
+- `INSTAPAPER_TOKEN` — create an app at [instapaper.com/developers/applications](https://www.instapaper.com/developers/applications), open it, and select **Generate access token**. An existing API v1 `oauth_token` also works.
 - `KINDLE_EMAIL` — your `@kindle.com` address from [amazon.com/myk](https://www.amazon.com/myk)
 - `MAIL_FROM` — the address Mail.app sends from (required if you have multiple accounts — Amazon silently drops mail from unapproved addresses)
 
@@ -60,7 +59,7 @@ Dry run writes `Instapaper-ReadLater-YYYY-MM-DD-XXXXXX.epub` to the project dire
 
 ## Legal / ToS notes
 
-- Instapaper's `bookmarks/get_text` endpoint is explicitly **personal use only** per their API docs. Run this script only against your own Instapaper account.
+- Instapaper's parsed-content endpoint (`/api/2/bookmarks/{id}/parse`) is **personal use only** without an Instaparser key: the authenticated account must be the one that registered the app. Run this script only against your own Instapaper account.
 - Do not commit article content (EPUBs, extracted HTML) to this repo — the `*.epub` gitignore enforces this for generated files.
-- The MIT license covers this source code. Use of the Instapaper API is separately subject to [Instapaper's API Terms of Use](https://www.instapaper.com/developers/api-terms).
+- The MIT license covers this source code. Use of the Instapaper API is separately subject to [Instapaper's API Terms of Use](https://www.instapaper.com/developers/overview/api-terms).
 - You are responsible for configuring your own Amazon approved-sender list at amazon.com/myk.
