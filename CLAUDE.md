@@ -22,6 +22,7 @@ After reading on Kindle, archive articles manually in Instapaper.
 
 ```bash
 python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -53,4 +54,5 @@ Dry run writes `Instapaper-ReadLater-YYYY-MM-DD-XXXXXX.epub` to the project dire
 
 ## Troubleshooting
 
+- **`ModuleNotFoundError: No module named 'requests'`.** Either the venv isn't activated, or a Homebrew Python upgrade removed the version `.venv` was built on. In the second case `.venv/bin/python` is a dangling symlink, so `python3` falls through to Homebrew's interpreter even with the venv activated. Fix: `rm -rf .venv`, then rerun Setup.
 - **"Send failed:" with no message + macOS "Python quit unexpectedly" (fixed).** On macOS 27, `subprocess` launching `osascript` via `fork()` segfaulted in the child (`crashed on child side of fork pre-exec` in `~/Library/Logs/DiagnosticReports/Python-*.ips`), because Network.framework threads from the earlier HTTP/image downloads don't survive fork. Fix: `send_email` calls `/usr/bin/osascript` by absolute path with `close_fds=False`, which makes Python use `posix_spawn` (no fork). Don't revert either detail — both are required for the spawn path. A crash of this kind now reports `osascript killed by signal N`.
